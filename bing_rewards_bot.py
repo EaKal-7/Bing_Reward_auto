@@ -18,10 +18,18 @@ logging.basicConfig(
 )
 
 # 常量定义
-TARGET_PC_POINTS = 90   # PC端积分目标
-TARGET_MOBILE_POINTS = 60   # 移动端积分目标
-ENABLE_PC_POINT_LIMIT = False   # 是否启用PC端积分限制
-ENABLE_MOBILE_POINT_LIMIT = False   # 是否启用移动端积分限制
+TARGET_PC_POINTS = 90   # PC端积分目标 (已自动获取，本项报废)
+TARGET_MOBILE_POINTS = 60   # 移动端积分目标(已自动获取，本项报废)
+ENABLE_PC_POINT_LIMIT = True   # 是否启用PC端积分限制
+ENABLE_MOBILE_POINT_LIMIT = True   # 是否启用移动端积分限制
+
+logging.basicConfig(
+    filename='bing_rewards_bot.log',    # 日志文件名
+    filemode='a',                       # 以追加模式写入日志
+    format='%(asctime)s - %(levelname)s - %(message)s',  # 日志格式
+    level=logging.INFO,                 # 日志级别
+    encoding='utf-8'                    # 确保使用 UTF-8 编码
+)
 
 # 可用的数据源（与JS脚本中一致）
 SEARCH_KEY_SOURCES = [
@@ -270,9 +278,6 @@ def perform_searches(driver, search_terms, target_points=None):
                 # 检测积分变化
                 if initial_points is not None and target_points is not None:
                     try:
-                        driver.get("https://www.bing.com/")
-                        logging.info("已重新打开 Bing Rewards 页面以检测积分。")
-                        time.sleep(random.uniform(2, 4))  # 等待页面加载
                         current_points = get_current_points(driver)
                         if current_points is not None:
                             logging.info(f"当前积分：{current_points}")
@@ -283,11 +288,6 @@ def perform_searches(driver, search_terms, target_points=None):
                             logging.warning("无法获取当前积分。")
                     except Exception as e:
                         logging.error(f"检测积分时发生错误：{e}")
-
-                # 返回 Bing 搜索页面继续搜索
-                driver.get("https://www.bing.com")
-                logging.info("返回 Bing 搜索页面。")
-                time.sleep(random.uniform(2, 5))  # 等待页面加载
 
             except Exception as e:
                 logging.error(f"执行搜索 {i+1} 时发生错误：{e}")
@@ -314,19 +314,52 @@ def perform_searches(driver, search_terms, target_points=None):
     except Exception as e:
         logging.error(f"访问 Bing Rewards 页面失败：{e}")
 
+def get_required_points(driver):
+    """
+    从 Bing Rewards 积分详情页获取 PC 端和移动端的所需积分。
+    返回一个元组 (pc_required_points, mobile_required_points)
+    """
+    try:
+        driver.get("https://rewards.bing.com/pointsbreakdown")  # 访问积分详情页面
+        logging.info("已打开积分详情页面。")
+        time.sleep(random.uniform(3, 5))  # 等待页面加载
+
+        # 获取 PC 端积分 (从 <p> 标签中提取)
+        pc_points_text = driver.find_element("xpath", "//p[contains(@class, 'pointsDetail') and contains(text(), ' / 90')]").text
+        # 提取 PC 端当前分数
+        pc_current_points = int(re.search(r"(\d+)", pc_points_text).group(1))
+        pc_required_points = 90 - pc_current_points  # 计算剩余的 PC 端积分
+        logging.info(f"PC 端当前积分：{pc_current_points}，剩余所需积分：{pc_required_points}")
+
+        # 获取移动端积分 (从 <p> 标签中提取)
+        mobile_points_text = driver.find_element("xpath", "//p[contains(@class, 'pointsDetail') and contains(text(), ' / 60')]").text
+        # 提取移动端当前分数
+        mobile_current_points = int(re.search(r"(\d+)", mobile_points_text).group(1))
+        mobile_required_points = 60 - mobile_current_points  # 计算剩余的移动端积分
+        logging.info(f"移动端当前积分：{mobile_current_points}，剩余所需积分：{mobile_required_points}")
+
+        return pc_required_points, mobile_required_points
+    except Exception as e:
+        logging.error(f"获取积分信息失败：{e}")
+        return None, None
+
 def main():
     # 通过上述函数获取500条关键词
     search_terms = fetch_keywords_from_api(min_count=500)
     logging.info(f"总共获取到 {len(search_terms)} 条关键词。")
     
     # 设置 Chrome 用户配置路径
-    profile_path = r"C:\\Users\\****\\AppData\\Local\\Google\\Chrome\\User Data"  # 根据自己的配置修改
+    profile_path = r"C:\\Users\\*****\\AppData\\Local\\Google\\Chrome\\User Data"  # 根据自己的配置修改
 
     # 执行 PC 端搜索
     logging.info("开始 PC 端搜索任务。")
     pc_driver = setup_driver(profile_path)
     if pc_driver:
-        perform_searches(pc_driver, search_terms, target_points=TARGET_PC_POINTS if ENABLE_PC_POINT_LIMIT else None)
+        # 获取 PC 和移动端所需的积分
+        pc_required_points, mobile_required_points = get_required_points(pc_driver)
+
+        # 执行 PC 端搜索
+        perform_searches(pc_driver, search_terms, target_points=pc_required_points if ENABLE_PC_POINT_LIMIT else None)
         try:
             pc_driver.quit()
             logging.info("PC 浏览器已成功关闭。")
@@ -348,7 +381,9 @@ def main():
     logging.info("开始移动端搜索任务。")
     mobile_driver = setup_driver(profile_path, mobile_emulation=mobile_emulation)
     if mobile_driver:
-        perform_searches(mobile_driver, search_terms, target_points=TARGET_MOBILE_POINTS if ENABLE_MOBILE_POINT_LIMIT else None)
+
+        # 执行移动端搜索
+        perform_searches(mobile_driver, search_terms, target_points=mobile_required_points if ENABLE_MOBILE_POINT_LIMIT else None)
         try:
             mobile_driver.quit()
             logging.info("移动端浏览器已成功关闭。")
