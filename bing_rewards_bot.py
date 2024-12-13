@@ -7,6 +7,11 @@ from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium_stealth import stealth
 import requests
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
 
 # 配置日志记录
 logging.basicConfig(
@@ -128,6 +133,34 @@ def fetch_keywords_from_api(min_count=500):
     # 如果仍不足min_count条（默认关键词不足），则返回现有数量
     return list(all_keywords)[:min_count]
 
+def get_mobile_points(driver):
+    try:
+        # 找到并点击 mHamburger 元素
+        menu_button = driver.find_element(By.ID, "mHamburger")
+        menu_button.click()
+
+        # 等待侧栏菜单完全展开
+        WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, "HBMenu")))
+
+        # 等待并获取积分元素
+        points_span = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "fly_id_rwds_b"))
+        )
+        
+        # 提取积分文本并转换为整数
+        points_text = points_span.get_attribute("aria-label")  # 获取积分信息文本
+        #invalid literal for int() with base 10: '8014 points'
+        points = int((points_text.split(":")[-1].strip()).split(" ")[0])  # 提取并转换积分值
+
+        # 打印日志
+        logging.info(f"[移动端] 当前积分：{points}")
+
+        return points
+
+    except Exception as e:
+        logging.error(f"获取积分时发生错误: {e}")
+        return None
+
 def get_current_points(driver, is_mobile=False):
     """
     获取当前的积分值。
@@ -142,11 +175,8 @@ def get_current_points(driver, is_mobile=False):
     """
     try:
         if is_mobile:
-            # 定位移动端积分的 span 元素
-            points_span = driver.find_element("id", "fly_id_rc")
-            points_text = points_span.text
-            points = int(points_text.strip())
-            logging.info(f"[移动端] 当前积分：{points}")
+            driver.refresh()  # 刷新页面以确保积分数值是最新的
+            points = get_mobile_points(driver)
             return points
         else:
             # 定位 PC 端积分的 div 元素
@@ -238,7 +268,9 @@ def perform_searches(driver, search_terms, target_points=None, is_mobile=False):
     """
     initial_points = None
     try:
-        driver.get("https://www.bing.com/")
+        driver.get("https://www.cn.bing.com/")
+        time.sleep(random.uniform(2, 4))  # 等待页面加载
+        driver.get("https://www.cn.bing.com/")
         logging.info("已打开 Bing Rewards 页面。")
         time.sleep(random.uniform(3, 5))  # 等待页面加载
         initial_points = get_current_points(driver, is_mobile)
@@ -383,7 +415,7 @@ def main():
     logging.info(f"总共获取到 {len(search_terms)} 条关键词。")
     
     # 设置 Chrome 用户配置路径
-    profile_path = r"C:\\Users\\XXXX\\AppData\\Local\\Google\\Chrome\\User Data"  # 根据自己的配置修改
+    profile_path = r"C:\\Users\\xxxx\\AppData\\Local\\Google\\Chrome\\User Data"  # 根据自己的配置修改
 
     # 执行 PC 端搜索
     logging.info("开始 PC 端搜索任务。")
@@ -403,12 +435,12 @@ def main():
         logging.error("未能初始化 PC 端 WebDriver，跳过 PC 端搜索任务。")
     
     # 等待一分钟后执行移动端搜索
-    logging.info("等待 60 秒后开始移动端搜索任务。")
-    time.sleep(60)
+    logging.info("等待 10 秒后开始移动端搜索任务。")
+    time.sleep(10)
     
     # 移动端仿真参数
     mobile_emulation = {
-        "deviceName": "iPhone X"
+        "deviceName": "iPhone 12 Pro"
     }
 
     # 执行移动端搜索
