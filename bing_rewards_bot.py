@@ -5,7 +5,6 @@ import logging
 import re
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium_stealth import stealth
 import requests
 
@@ -14,7 +13,8 @@ logging.basicConfig(
     filename='bing_rewards_bot.log',
     filemode='a',
     format='%(asctime)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    encoding='utf-8'
 )
 
 # 常量定义
@@ -23,24 +23,36 @@ TARGET_MOBILE_POINTS = 60   # 移动端积分目标(已自动获取，本项报�
 ENABLE_PC_POINT_LIMIT = True   # 是否启用PC端积分限制
 ENABLE_MOBILE_POINT_LIMIT = True   # 是否启用移动端积分限制
 
-logging.basicConfig(
-    filename='bing_rewards_bot.log',    # 日志文件名
-    filemode='a',                       # 以追加模式写入日志
-    format='%(asctime)s - %(levelname)s - %(message)s',  # 日志格式
-    level=logging.INFO,                 # 日志级别
-    encoding='utf-8'                    # 确保使用 UTF-8 编码
-)
-
-# 可用的数据源（与JS脚本中一致）
+# 关键词来源列表
 SEARCH_KEY_SOURCES = [
-    ("百度热搜", "BaiduHot"),
-    ("抖音热搜", "DouYinHot"),
-    ("搜狗热搜", "SoGouHot"),
-    ("360热搜", "SoHot"),
-    ("微博热搜", "WeiBoHot"),
-    ("知乎热搜", "ZhiHuHot"),
-    ("今日头条", "TouTiaoHot"),
-    ("快手热搜", "KuaiShouHot")
+    {"name": "bilibili", "url": "https://api-hot.imsyy.top/bilibili"},
+    {"name": "acfun", "url": "https://api-hot.imsyy.top/acfun"},
+    {"name": "weibo", "url": "https://api-hot.imsyy.top/weibo"},
+    {"name": "zhihu", "url": "https://api-hot.imsyy.top/zhihu"},
+    {"name": "zhihu-daily", "url": "https://api-hot.imsyy.top/zhihu-daily"},
+    {"name": "baidu", "url": "https://api-hot.imsyy.top/baidu"},
+    {"name": "douyin", "url": "https://api-hot.imsyy.top/douyin"},
+    {"name": "kuaishou", "url": "https://api-hot.imsyy.top/kuaishou"},
+    {"name": "douban-movie", "url": "https://api-hot.imsyy.top/douban-movie"},
+    {"name": "douban-group", "url": "https://api-hot.imsyy.top/douban-group"},
+    {"name": "tieba", "url": "https://api-hot.imsyy.top/tieba"},
+    {"name": "sspai", "url": "https://api-hot.imsyy.top/sspai"},
+    {"name": "ithome", "url": "https://api-hot.imsyy.top/ithome"},
+    {"name": "ithome-xijiayi", "url": "https://api-hot.imsyy.top/ithome-xijiayi"},
+    {"name": "jianshu", "url": "https://api-hot.imsyy.top/jianshu"},
+    {"name": "guokr", "url": "https://api-hot.imsyy.top/guokr"},
+    {"name": "thepaper", "url": "https://api-hot.imsyy.top/thepaper"},
+    {"name": "toutiao", "url": "https://api-hot.imsyy.top/toutiao"},
+    {"name": "36kr", "url": "https://api-hot.imsyy.top/36kr"},
+    {"name": "51cto", "url": "https://api-hot.imsyy.top/51cto"},
+    {"name": "csdn", "url": "https://api-hot.imsyy.top/csdn"},
+    {"name": "nodeseek", "url": "https://api-hot.imsyy.top/nodeseek"},
+    {"name": "juejin", "url": "https://api-hot.imsyy.top/juejin"},
+    {"name": "qq-news", "url": "https://api-hot.imsyy.top/qq-news"},
+    {"name": "sina", "url": "https://api-hot.imsyy.top/sina"},
+    {"name": "sina-news", "url": "https://api-hot.imsyy.top/sina-news"},
+    {"name": "netease-news", "url": "https://api-hot.imsyy.top/netease-news"},
+    {"name": "52pojie", "url": "https://api-hot.imsyy.top/52pojie"},
 ]
 
 # 默认本地关键词，当无法获取或不足500时，补充用
@@ -79,65 +91,81 @@ default_keywords = [
 
 def fetch_keywords_from_api(min_count=500):
     """
-    从多个数据源获取关键词，确保至少获取min_count条。
+    从多个API获取关键词，确保至少获取min_count条。
     如果不足则用默认关键词补足。
     """
     all_keywords = set()
-    # API基础URL
-    base_url = "https://api.gumengya.com/Api/"
-    # 尝试多个来源直到满足min_count
-    random_sources = random.sample(SEARCH_KEY_SOURCES, len(SEARCH_KEY_SOURCES))
-    for source_name, action in random_sources:
-        # 请求API
-        url = base_url + action
+    
+    for source in SEARCH_KEY_SOURCES:
+        url = source["url"]
+        name = source["name"]
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
+            
             if data.get("code") == 200 and "data" in data:
                 for item in data["data"]:
-                    # 根据JS脚本逻辑，这里简单处理下标题
-                    # 例如添加一些随机字符增加多样性
-                    kw = f"{source_name} {item['title']} {''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=3))}"
-                    all_keywords.add(kw)
-            # 如果已经达到min_count条，就可以提前结束
+                    keyword = item.get("title")
+                    if keyword:
+                        all_keywords.add(keyword.strip())
+            
+            logging.info(f"从 '{name}' 获取了 {len(data.get('data', []))} 个关键词。")
+            
             if len(all_keywords) >= min_count:
-                break
-        except Exception as e:
-            # 如果某个来源获取失败，则继续尝试下一个来源
-            logging.error(f"获取{source_name}词条失败：{e}")
-            continue
+                break  # 达到所需数量，停止请求
+        except requests.exceptions.RequestException as e:
+            logging.error(f"从 '{name}' 获取关键词失败：{e}")
+            continue  # 继续尝试下一个来源
     
     # 如果总数不足，则用默认关键词补足
     if len(all_keywords) < min_count:
         needed = min_count - len(all_keywords)
-        # 随机从默认关键词中抽取所需数量(如果默认不够，就全部加上)
         additional = random.sample(default_keywords, min(needed, len(default_keywords)))
         all_keywords.update(additional)
+        logging.info(f"使用默认关键词补足了 {len(additional)} 个关键词。")
     
     # 如果仍不足min_count条（默认关键词不足），则返回现有数量
-    return list(all_keywords)
+    return list(all_keywords)[:min_count]
 
-def get_current_points(driver):
+def get_current_points(driver, is_mobile=False):
     """
     获取当前的积分值。
-    根据提供的HTML结构，解析aria-label属性中的积分数值。
+    根据驱动器的上下文（PC 或移动端），选择不同的元素来解析积分数值。
+    
+    参数:
+    - driver: Selenium WebDriver 实例
+    - is_mobile: 布尔值，是否为移动端驱动器
+    
+    返回:
+    - 积分值（int）或 None
     """
     try:
-        # 定位包含积分的div
-        points_div = driver.find_element("id", "rh_rwm")
-        aria_label = points_div.get_attribute("aria-label")
-        # 解析积分数值
-        match = re.search(r'Microsoft Rewards (\d+)', aria_label)
-        if match:
-            points = int(match.group(1))
-            logging.info(f"当前积分：{points}")
+        if is_mobile:
+            # 定位移动端积分的 span 元素
+            points_span = driver.find_element("id", "fly_id_rc")
+            points_text = points_span.text
+            points = int(points_text.strip())
+            logging.info(f"[移动端] 当前积分：{points}")
             return points
         else:
-            logging.warning("未能在aria-label中找到积分信息。")
-            return None
+            # 定位 PC 端积分的 div 元素
+            points_div = driver.find_element("id", "rh_rwm")
+            aria_label = points_div.get_attribute("aria-label")
+            # 解析积分数值
+            match = re.search(r'Microsoft Rewards (\d+)', aria_label)
+            if match:
+                points = int(match.group(1))
+                logging.info(f"[PC端] 当前积分：{points}")
+                return points
+            else:
+                logging.warning("未能在aria-label中找到积分信息。")
+                return None
     except Exception as e:
-        logging.error(f"获取积分失败：{e}")
+        if is_mobile:
+            logging.error(f"[移动端] 获取积分失败：{e}")
+        else:
+            logging.error(f"[PC端] 获取积分失败：{e}")
         return None
 
 def setup_driver(profile_path, mobile_emulation=None):
@@ -161,7 +189,7 @@ def setup_driver(profile_path, mobile_emulation=None):
 
     # 使用用户数据目录
     options.add_argument(f"user-data-dir={profile_path}")
-    options.add_argument("profile-directory=Profile 1")
+    options.add_argument("profile-directory=Profile 2")
 
     # 一些隐匿和降低检测的配置项
     options.add_argument("--no-proxy-server")
@@ -197,17 +225,23 @@ def setup_driver(profile_path, mobile_emulation=None):
 
     return driver
 
-def perform_searches(driver, search_terms, target_points=None):
+def perform_searches(driver, search_terms, target_points=None, is_mobile=False):
     """
     执行搜索任务，监控积分变化。
-    如果积分变化超过target_points，则停止搜索。
+    如果积分变化超过 target_points，则停止搜索。
+    
+    参数:
+    - driver: Selenium WebDriver 实例
+    - search_terms: 搜索关键词列表
+    - target_points: 积分目标（可选）
+    - is_mobile: 布尔值，是否为移动端驱动器
     """
     initial_points = None
     try:
         driver.get("https://www.bing.com/")
         logging.info("已打开 Bing Rewards 页面。")
         time.sleep(random.uniform(3, 5))  # 等待页面加载
-        initial_points = get_current_points(driver)
+        initial_points = get_current_points(driver, is_mobile)
         if initial_points is not None:
             logging.info(f"初始积分：{initial_points}")
         else:
@@ -271,14 +305,14 @@ def perform_searches(driver, search_terms, target_points=None):
                     time.sleep(random.uniform(1, 2))
 
                 # 在下一次搜索前，随机等待较长时间，避免固定间隔
-                wait_time = random.uniform(20, 60)
+                wait_time = random.uniform(10, 30)
                 logging.debug(f"等待 {wait_time:.2f} 秒后进行下一次搜索。")
                 time.sleep(wait_time)
 
                 # 检测积分变化
                 if initial_points is not None and target_points is not None:
                     try:
-                        current_points = get_current_points(driver)
+                        current_points = get_current_points(driver, is_mobile)
                         if current_points is not None:
                             logging.info(f"当前积分：{current_points}")
                             if current_points - initial_points >= target_points:
@@ -306,7 +340,7 @@ def perform_searches(driver, search_terms, target_points=None):
         driver.get("https://www.bing.com/")
         logging.info("已打开 Bing Rewards 页面以获取最终积分。")
         time.sleep(random.uniform(2, 4))  # 等待页面加载
-        final_points = get_current_points(driver)
+        final_points = get_current_points(driver, is_mobile)
         if final_points is not None:
             logging.info(f"最终积分：{final_points}")
         else:
@@ -349,7 +383,7 @@ def main():
     logging.info(f"总共获取到 {len(search_terms)} 条关键词。")
     
     # 设置 Chrome 用户配置路径
-    profile_path = r"C:\\Users\\*****\\AppData\\Local\\Google\\Chrome\\User Data"  # 根据自己的配置修改
+    profile_path = r"C:\\Users\\XXXX\\AppData\\Local\\Google\\Chrome\\User Data"  # 根据自己的配置修改
 
     # 执行 PC 端搜索
     logging.info("开始 PC 端搜索任务。")
@@ -359,7 +393,7 @@ def main():
         pc_required_points, mobile_required_points = get_required_points(pc_driver)
 
         # 执行 PC 端搜索
-        perform_searches(pc_driver, search_terms, target_points=pc_required_points if ENABLE_PC_POINT_LIMIT else None)
+        perform_searches(pc_driver, search_terms, target_points=pc_required_points if ENABLE_PC_POINT_LIMIT else None, is_mobile=False)
         try:
             pc_driver.quit()
             logging.info("PC 浏览器已成功关闭。")
@@ -383,7 +417,7 @@ def main():
     if mobile_driver:
 
         # 执行移动端搜索
-        perform_searches(mobile_driver, search_terms, target_points=mobile_required_points if ENABLE_MOBILE_POINT_LIMIT else None)
+        perform_searches(mobile_driver, search_terms, target_points=mobile_required_points if ENABLE_MOBILE_POINT_LIMIT else None, is_mobile=True)
         try:
             mobile_driver.quit()
             logging.info("移动端浏览器已成功关闭。")
