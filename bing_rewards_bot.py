@@ -27,6 +27,8 @@ TARGET_PC_POINTS = 90   # PC端积分目标 (已自动获取，本项报废)
 TARGET_MOBILE_POINTS = 60   # 移动端积分目标(已自动获取，本项报废)
 ENABLE_PC_POINT_LIMIT = True   # 是否启用PC端积分限制
 ENABLE_MOBILE_POINT_LIMIT = True   # 是否启用移动端积分限制
+RANGE_SEARCH = 250   # 搜索次数
+SKIP_PC_SEARCH = False   # 是否跳过PC端搜索
 
 # 关键词来源列表
 SEARCH_KEY_SOURCES = [
@@ -37,7 +39,6 @@ SEARCH_KEY_SOURCES = [
     {"name": "zhihu-daily", "url": "https://api-hot.imsyy.top/zhihu-daily"},
     {"name": "baidu", "url": "https://api-hot.imsyy.top/baidu"},
     {"name": "douyin", "url": "https://api-hot.imsyy.top/douyin"},
-    {"name": "kuaishou", "url": "https://api-hot.imsyy.top/kuaishou"},
     {"name": "douban-movie", "url": "https://api-hot.imsyy.top/douban-movie"},
     {"name": "douban-group", "url": "https://api-hot.imsyy.top/douban-group"},
     {"name": "tieba", "url": "https://api-hot.imsyy.top/tieba"},
@@ -94,7 +95,7 @@ default_keywords = [
     # ... (您可以根据需要继续扩充)
 ]
 
-def fetch_keywords_from_api(min_count=500):
+def fetch_keywords_from_api(min_count=777):
     """
     从多个API获取关键词，确保至少获取min_count条。
     如果不足则用默认关键词补足。
@@ -134,34 +135,42 @@ def fetch_keywords_from_api(min_count=500):
     return list(all_keywords)[:min_count]
 
 def get_mobile_points(driver):
+    """
+    通过界面交互获取移动端当前的积分值。
+
+    参数:
+    - driver: Selenium WebDriver 实例
+
+    返回:
+    - 积分值（int）或 None
+    """
     try:
-        # 找到并点击 mHamburger 元素
-        menu_button = driver.find_element(By.ID, "mHamburger")
-        menu_button.click()
-
-        # 等待侧栏菜单完全展开
-        WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, "HBMenu")))
-
-        # 等待并获取积分元素
-        points_span = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.ID, "fly_id_rwds_b"))
+        driver.refresh()  # 刷新页面以确保积分数值是最新的
+        # 定位并点击SVG元素以展开积分菜单
+        svg_element = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "svg.b_serphb"))
         )
-        
-        # 提取积分文本并转换为整数
-        points_text = points_span.get_attribute("aria-label")  # 获取积分信息文本
-        #invalid literal for int() with base 10: '8014 points'
-        points = int((points_text.split(":")[-1].strip()).split(" ")[0])  # 提取并转换积分值
+        svg_element.click()
+        logging.info("已点击移动端积分菜单按钮。")
 
-        # 打印日志
+        # 等待积分元素可见
+        points_span = WebDriverWait(driver, 10).until(
+            EC.visibility_of_element_located((By.ID, "fly_id_rc"))
+        )
+
+        # 提取积分文本并转换为整数
+        points_text = points_span.text.strip()
+        points = int(points_text)
         logging.info(f"[移动端] 当前积分：{points}")
 
         return points
 
     except Exception as e:
-        logging.error(f"获取积分时发生错误: {e}")
+        logging.error(f"获取移动端积分时发生错误: {e}")
         return None
 
-def get_current_points(driver, is_mobile=False):
+
+def get_current_points(driver, is_mobile=False):        #获取的是总分数
     """
     获取当前的积分值。
     根据驱动器的上下文（PC 或移动端），选择不同的元素来解析积分数值。
@@ -175,7 +184,6 @@ def get_current_points(driver, is_mobile=False):
     """
     try:
         if is_mobile:
-            driver.refresh()  # 刷新页面以确保积分数值是最新的
             points = get_mobile_points(driver)
             return points
         else:
@@ -186,7 +194,7 @@ def get_current_points(driver, is_mobile=False):
             match = re.search(r'Microsoft Rewards (\d+)', aria_label)
             if match:
                 points = int(match.group(1))
-                logging.info(f"[PC端] 当前积分：{points}")
+                # logging.info(f"[PC端] 当前积分：{points}")
                 return points
             else:
                 logging.warning("未能在aria-label中找到积分信息。")
@@ -255,55 +263,91 @@ def setup_driver(profile_path, mobile_emulation=None):
 
     return driver
 
-def perform_searches(driver, search_terms, target_points=None, is_mobile=False):
+def get_initial_points(driver, is_mobile=False):
+    try:
+        driver.get("https://rewards.bing.com/pointsbreakdown")  # 访问积分详情页面
+        logging.info("已打开积分详情页面。")
+        time.sleep(random.uniform(3, 5))  # 等待页面加载
+        points_span = WebDriverWait(driver, 10).until(
+            EC.visibility_of_element_located((
+                By.XPATH,
+                "//span[@mee-element-ready='$ctrl.loadCounterAnimation()' and @tabindex='0' and contains(@aria-label, ',')]"
+            ))
+        )
+        points_text = points_span.text.strip()  # e.g., "12,249"
+        points = int(points_text.replace(",", ""))  # 移除逗号并转换为整数
+        # 获取 PC 端积分 (从 <p> 标签中提取)
+        pc_points_text = driver.find_element("xpath", "//p[contains(@class, 'pointsDetail') and contains(text(), ' / 90')]").text
+        # 提取 PC 端当前分数
+        pc_current_points = int(re.search(r"(\d+)", pc_points_text).group(1))
+        pc_required_points = 90 - pc_current_points  # 计算剩余的 PC 端积分
+        logging.info(f"PC 端当前积分：{pc_current_points}，剩余所需积分：{pc_required_points}")
+
+        # 获取移动端积分 (从 <p> 标签中提取)
+        mobile_points_text = driver.find_element("xpath", "//p[contains(@class, 'pointsDetail') and contains(text(), ' / 60')]").text
+        # 提取移动端当前分数
+        mobile_current_points = int(re.search(r"(\d+)", mobile_points_text).group(1))
+        mobile_required_points = 60 - mobile_current_points  # 计算剩余的移动端积分
+        logging.info(f"移动端当前积分：{mobile_current_points}，剩余所需积分：{mobile_required_points}")
+
+        if is_mobile:
+            return mobile_current_points,mobile_required_points,points
+        else:
+            return pc_current_points,pc_required_points,points
+    except Exception as e:
+        logging.error(f"获取积分信息失败：{e}")
+        return None, None
+
+def perform_searches(driver, search_terms, target_points=None, is_mobile=False, last_points=None):
     """
     执行搜索任务，监控积分变化。
     如果积分变化超过 target_points，则停止搜索。
-    
+
     参数:
     - driver: Selenium WebDriver 实例
     - search_terms: 搜索关键词列表
     - target_points: 积分目标（可选）
     - is_mobile: 布尔值，是否为移动端驱动器
+    - last_points: 上一次获取的积分值，用于计算本轮积分
+
+    返回:
+    - final_points: 执行搜索后的最终积分值
     """
-    initial_points = None
+    # initial_points = last_points
+    # if initial_points is None:
     try:
-        driver.get("https://www.cn.bing.com/")
-        time.sleep(random.uniform(2, 4))  # 等待页面加载
-        driver.get("https://www.cn.bing.com/")
-        logging.info("已打开 Bing Rewards 页面。")
-        time.sleep(random.uniform(3, 5))  # 等待页面加载
-        initial_points = get_current_points(driver, is_mobile)
+        _,_,initial_points = get_initial_points(driver, is_mobile)
         if initial_points is not None:
             logging.info(f"初始积分：{initial_points}")
+            last_points = initial_points
         else:
             logging.warning("无法获取初始积分。")
     except Exception as e:
-        logging.error(f"访问 Bing Rewards 页面失败：{e}")
-    
+        logging.error(f"访问 Bing 搜索页面失败：{e}")
+
     if initial_points is None and target_points is not None:
         logging.warning("无法获取初始积分，无法监控积分变化。")
-    
+
     try:
         driver.get("https://www.bing.com")
         logging.info("已打开 Bing 搜索页面。")
         time.sleep(random.uniform(2, 5))  # 在页面加载后随机等待几秒
-    
-        # 执行100次搜索
-        for i in range(100):
+
+        # 执行搜索
+        for i in range(RANGE_SEARCH):
             search_term = random.choice(search_terms)  # 选择随机搜索词
             try:
                 # 有时Bing会动态加载搜索框，可多次尝试获取
                 for attempt in range(3):
                     try:
-                        search_box = driver.find_element("name", "q")
+                        search_box = driver.find_element(By.NAME, "q")
                         break
                     except:
                         time.sleep(random.uniform(1, 3))
                 else:
                     logging.warning(f"搜索框未找到，跳过搜索 {i+1}")
                     continue
-                
+
                 # 清空搜索框
                 search_box.clear()
                 time.sleep(random.uniform(0.5, 1.5))  # 模拟短暂思考时间
@@ -331,25 +375,28 @@ def perform_searches(driver, search_terms, target_points=None, is_mobile=False):
                     time.sleep(random.uniform(1, 3))  # 浏览一下内容
 
                 # 偶尔返回顶部，模拟用户上下滑动
-                if random.random() < 0.3:
                     driver.execute_script("window.scrollTo(0,0);")
                     logging.debug("返回顶部。")
                     time.sleep(random.uniform(1, 2))
 
                 # 在下一次搜索前，随机等待较长时间，避免固定间隔
-                wait_time = random.uniform(10, 30)
+                wait_time = random.uniform(20, 40)
                 logging.debug(f"等待 {wait_time:.2f} 秒后进行下一次搜索。")
                 time.sleep(wait_time)
 
                 # 检测积分变化
                 if initial_points is not None and target_points is not None:
                     try:
-                        current_points = get_current_points(driver, is_mobile)
+                        current_points = get_current_points(driver, is_mobile)  #获取的是当前总分
                         if current_points is not None:
-                            logging.info(f"当前积分：{current_points}")
-                            if current_points - initial_points >= target_points:
-                                logging.info(f"积分增加超过{target_points}（{current_points - initial_points}），停止搜索。")
+                            gained_points = current_points - initial_points
+                            temp_points = current_points - last_points
+                            logging.info(f"当前积分：{current_points}/{target_points+initial_points}，本轮获得积分：{gained_points},本次获得积分：{temp_points}")
+                            if gained_points >= target_points:
+                                logging.info(f"积分增加超过{target_points+initial_points}（{target_points}），停止搜索。")
                                 break  # 跳出循环，停止搜索
+                            else:
+                                last_points = current_points  # 更新初始积分
                         else:
                             logging.warning("无法获取当前积分。")
                     except Exception as e:
@@ -363,10 +410,10 @@ def perform_searches(driver, search_terms, target_points=None, is_mobile=False):
                 time.sleep(random.uniform(3, 6))
 
         logging.info("搜索任务完成。")
-    
+
     except Exception as e:
         logging.error(f"执行搜索任务时发生错误：{e}")
-    
+
     # 获取最终积分
     try:
         driver.get("https://www.bing.com/")
@@ -379,6 +426,8 @@ def perform_searches(driver, search_terms, target_points=None, is_mobile=False):
             logging.warning("无法获取最终积分。")
     except Exception as e:
         logging.error(f"访问 Bing Rewards 页面失败：{e}")
+
+    return initial_points
 
 def get_required_points(driver):
     """
@@ -411,11 +460,11 @@ def get_required_points(driver):
 
 def main():
     # 通过上述函数获取500条关键词
-    search_terms = fetch_keywords_from_api(min_count=500)
+    search_terms = fetch_keywords_from_api()
     logging.info(f"总共获取到 {len(search_terms)} 条关键词。")
     
     # 设置 Chrome 用户配置路径
-    profile_path = r"C:\\Users\\xxxx\\AppData\\Local\\Google\\Chrome\\User Data"  # 根据自己的配置修改
+    profile_path = r"C:\\Users\\XXXX\\AppData\\Local\\Google\\Chrome\\User Data"  # 根据自己的配置修改
 
     # 执行 PC 端搜索
     logging.info("开始 PC 端搜索任务。")
@@ -425,7 +474,8 @@ def main():
         pc_required_points, mobile_required_points = get_required_points(pc_driver)
 
         # 执行 PC 端搜索
-        perform_searches(pc_driver, search_terms, target_points=pc_required_points if ENABLE_PC_POINT_LIMIT else None, is_mobile=False)
+        if not SKIP_PC_SEARCH and pc_required_points > 0:
+            perform_searches(pc_driver, search_terms, target_points=pc_required_points if ENABLE_PC_POINT_LIMIT else None, is_mobile=False,last_points=0)
         try:
             pc_driver.quit()
             logging.info("PC 浏览器已成功关闭。")
@@ -434,7 +484,7 @@ def main():
     else:
         logging.error("未能初始化 PC 端 WebDriver，跳过 PC 端搜索任务。")
     
-    # 等待一分钟后执行移动端搜索
+    # 等待一段时间后执行移动端搜索
     logging.info("等待 10 秒后开始移动端搜索任务。")
     time.sleep(10)
     
@@ -447,9 +497,20 @@ def main():
     logging.info("开始移动端搜索任务。")
     mobile_driver = setup_driver(profile_path, mobile_emulation=mobile_emulation)
     if mobile_driver:
-
+        # 获取移动端初始积分
+        _,_,initial_mobile_points = get_initial_points(mobile_driver, is_mobile=True)
+        if initial_mobile_points is None:
+            logging.error("无法获取移动端初始积分，跳过移动端搜索任务。")
+            initial_mobile_points = 0  # 使用默认值
+        
         # 执行移动端搜索
-        perform_searches(mobile_driver, search_terms, target_points=mobile_required_points if ENABLE_MOBILE_POINT_LIMIT else None, is_mobile=True)
+        final_mobile_points = perform_searches(
+            mobile_driver, 
+            search_terms, 
+            target_points=mobile_required_points if ENABLE_MOBILE_POINT_LIMIT else None, 
+            is_mobile=True, 
+            last_points=initial_mobile_points
+        )
         try:
             mobile_driver.quit()
             logging.info("移动端浏览器已成功关闭。")
@@ -459,6 +520,7 @@ def main():
         logging.error("未能初始化移动端 WebDriver，跳过移动端搜索任务。")
 
     print("所有搜索任务完成。查看日志文件 'bing_rewards_bot.log' 以获取详细信息。")
+
 
 if __name__ == "__main__":
     main()
